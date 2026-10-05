@@ -2406,14 +2406,24 @@ app.post('/api/glass-quarantines', (req, res) => {
     });
   }
   if (r.code === 'op_no_conflict') {
+    const existingDetail = db.getQuarantineDetail(r.existing.id);
     return res.status(409).json({
       ok: false, code: 'op_no_conflict', opNo: p.opNo,
       error: `同一操作号 ${p.opNo} 已用于内容不同的操作；请核对后使用新的操作号（本次未生效）`,
       existing: {
+        id: r.existing.id,
+        opNo: p.opNo,
         action: r.existing.action,
         actionText: quarantineActionZh(r.existing.action),
         reason: r.existing.reason,
+        createdAt: existingDetail ? existingDetail.createdAt : null,
         colors: r.existing.colors,
+        items: existingDetail ? existingDetail.items.map((it) => ({
+          sheetId: it.sheetId,
+          color: it.color,
+          count: it.count,
+          balanceQuarantined: it.balanceQuarantined,
+        })) : [],
       },
     });
   }

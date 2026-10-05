@@ -225,15 +225,37 @@ test('同操作号：同内容重试返回原记录，异内容 409 且不重复
   let s = await sheetOf(RED);
   assert.strictEqual(s.quarantined, 2, '重试不重复隔离');
 
+  const ledgerEntryCount = async (sheetId) =>
+    (await api('GET', `/api/ledger?type=glass&specId=${sheetId}`)).data.ledger.entries.length;
+  const redLedgerBefore = await ledgerEntryCount(RED);
+  const greenLedgerBefore = await ledgerEntryCount(GREEN);
+
   for (const body of [
     { action: 'hold', reason: '别的原因', items: [{ color: '#ff0000', count: 2 }, { sheetId: GREEN, count: 1 }] },
     { action: 'hold', reason: '边角气泡、结石', items: [{ color: '#ff0000', count: 1 }, { sheetId: GREEN, count: 1 }] },
     { action: 'release', reason: '边角气泡、结石', items: [{ color: '#ff0000', count: 2 }, { sheetId: GREEN, count: 1 }] },
+    { action: 'hold', reason: '边角气泡、结石', items: [{ color: '#ff0000', count: 2 }, { color: '#0000ff', count: 1 }] },
   ]) {
     const conflict = await api('POST', '/api/glass-quarantines', { opNo: 'Q-HOLD-1', ...body });
     assert.strictEqual(conflict.status, 409, JSON.stringify(body));
     assert.strictEqual(conflict.data.code, 'op_no_conflict');
+    assert.strictEqual(conflict.data.existing.id, 1);
+    assert.strictEqual(conflict.data.existing.opNo, 'Q-HOLD-1');
     assert.strictEqual(conflict.data.existing.action, 'hold');
+    assert.strictEqual(conflict.data.existing.reason, '边角气泡、结石');
+    assert.deepStrictEqual(conflict.data.existing.colors, [
+      { sheetId: RED, count: 2 },
+      { sheetId: GREEN, count: 1 },
+    ]);
+    assert.deepStrictEqual(
+      conflict.data.existing.items.map((i) => ({ sheetId: i.sheetId, color: i.color, count: i.count })),
+      [
+        { sheetId: RED, color: '#ff0000', count: 2 },
+        { sheetId: GREEN, color: '#00ff00', count: 1 },
+      ],
+    );
+    assert.strictEqual(await ledgerEntryCount(RED), redLedgerBefore, '冲突不追加红色台账');
+    assert.strictEqual(await ledgerEntryCount(GREEN), greenLedgerBefore, '冲突不追加绿色台账');
   }
   s = await sheetOf(RED);
   assert.strictEqual(s.quarantined, 2, '冲突不改变隔离量');

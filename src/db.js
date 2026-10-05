@@ -2464,6 +2464,7 @@ function createGlassQuarantine(p) {
           code: 'op_no_conflict',
           opNo: p.opNo,
           existing: {
+            id: dup.id,
             action: dup.action,
             reason: dup.reason,
             colors: [...quarantineContentFromRows(dup, dupItems).colors.entries()]
