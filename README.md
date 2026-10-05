@@ -807,7 +807,7 @@ curl -s localhost:3000/api/combo-orders/2/issues
 - **整次不生效**：未知/未登记颜色（404 `color_not_registered`/`sheet_not_found`）、数量非正整数、空原因、缺/非法操作号、非法动作、同色重复（400）、或任一颜色可隔离量/隔离余额不足（409 `shortage`，`problems[]` 逐色给出 `stock/reserved/quarantined/available/requested/shortage`），都**整次回滚**，不写任何隔离记录、不改台账。
 - **库存联动口径**：裁片订单确认、裁片换单、整套单确认的可用量均扣除 `quarantined`；领料时实物库存必须足以覆盖**净预留 + 隔离量**（已确认单据仍按原预留领料，隔离张不会被发走）；手工 `PATCH /api/glass-sheets/:id` 库存不得低于 `净预留 + 隔离量`；盘点预览固化隔离基准，确认时隔离量已漂移返回 409 `quarantined_changed`，实盘数低于 `净预留 + 隔离量` 返回 409 `below_reserved`。
 - **不可变与台账**：隔离主记录与分色明细（记录各色当次张数与**笔后隔离余额**）只追加、不可改、不可删；每次操作在**同一事务**写台账 `quarantine_hold`（`deltaQuarantined:+n`）或 `quarantine_release`（`deltaQuarantined:-n`），实物与净预留增减为 0，玻璃台账另附 `deltaQuarantined/balanceQuarantined` 两列，逐笔满足“上笔余额 + 本笔增减 = 本笔余额”。
-- **幂等与冲突**：同一 `opNo` 同内容（动作/原因/各色张数一致，与颜色顺序无关）重试 → 200 `idempotent:true` 返回原记录，不重复变更；同号异内容 → 409 `op_no_conflict`（附首次提交的 `existing`）。
+- **幂等与冲突**：同一 `opNo` 仅在 `action`、trim 后的 `reason`、**颜色集合及每色张数**全部一致时视为重试（颜色项顺序不同不影响判定；缺少颜色、增加颜色、任一数量不同均不算一致）→ 200 `idempotent:true` 返回原记录，不重复变更；任一字段不同均返回 409 `op_no_conflict`，响应中的 `existing` 给出首次已记录的 `action/actionText/reason/colors[{sheetId,color,count}]`，本次不改隔离量、不追加台账。
 - **查询**：
   - `GET /api/glass-quarantines`：全部历史（倒序），可 `?sheetId=N`、`?color=%23rrggbb` 过滤，或 `?opNo=...` 按操作号精确查；
   - `GET /api/glass-quarantines/:id`：单条记录及分色明细；操作号/记录不存在 404，非法筛选 400；
@@ -849,7 +849,17 @@ curl -s localhost:3000/api/glass-quarantines -H 'Content-Type: application/json'
        "items":[{"sheetId":2,"count":1},{"color":"#ff0000","count":2}]}'
 # -> 200 {"ok":true,"idempotent":true,"quarantine":{"id":1,...}}
 
-# 5) 隔离/解除历史：全部、按颜色、按操作号、按记录 id
+# 5) 同一操作号任一字段不同（动作/原因/缺色/多色/数量不同）→ 409；返回已记录内容且不变更
+curl -s localhost:3000/api/glass-quarantines -H 'Content-Type: application/json' \
+  -d '{"opNo":"Q-20261005-001","action":"hold","reason":"边角气泡、结石",
+       "items":[{"color":"#ff0000","count":2}]}'
+# -> 409 {"ok":false,"code":"op_no_conflict","opNo":"Q-20261005-001",
+#         "error":"同一操作号 Q-20261005-001 已用于内容不同的操作；请核对后使用新的操作号（本次未生效）",
+#         "existing":{"action":"hold","actionText":"隔离","reason":"边角气泡、结石",
+#                     "colors":[{"sheetId":1,"color":"#ff0000","count":2},
+#                               {"sheetId":2,"color":"#00ff00","count":1}]}}
+
+# 6) 隔离/解除历史：全部、按颜色、按操作号、按记录 id
 curl -s localhost:3000/api/glass-quarantines
 curl -s 'localhost:3000/api/glass-quarantines?color=%23ff0000'
 curl -s 'localhost:3000/api/glass-quarantines?sheetId=2'
@@ -886,9 +896,15 @@ curl -s localhost:3000/api/glass-quarantines -H 'Content-Type: application/json'
 
 # 多色其一不足 → 整次回滚（另一色也不变）
 
-# 同一操作号不同内容 → 409
-# -> {"ok":false,"code":"op_no_conflict","opNo":"Q-20261005-001",
-#     "existing":{"action":"hold","reason":"边角气泡、结石","colors":[{"sheetId":1,"count":2},...]}}
+# 同一操作号不同内容（示例：少了绿色；换 action/reason/数量也一样）→ 409
+curl -s localhost:3000/api/glass-quarantines -H 'Content-Type: application/json' \
+  -d '{"opNo":"Q-20261005-001","action":"hold","reason":"边角气泡、结石",
+       "items":[{"color":"#ff0000","count":2}]}'
+# -> 409 {"ok":false,"code":"op_no_conflict","opNo":"Q-20261005-001",
+#     "existing":{"action":"hold","actionText":"隔离","reason":"边角气泡、结石",
+#                 "colors":[{"sheetId":1,"color":"#ff0000","count":2},
+#                           {"sheetId":2,"color":"#00ff00","count":1}]}}
+# 冲突请求不会改各色 quarantined，也不会追加 stock_ledger 流水。
 
 # 手工调库低于 净预留 + 隔离量 → 409
 curl -s -X PATCH localhost:3000/api/glass-sheets/1 -H 'Content-Type: application/json' \

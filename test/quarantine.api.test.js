@@ -225,20 +225,46 @@ test('同操作号：同内容重试返回原记录，异内容 409 且不重复
   let s = await sheetOf(RED);
   assert.strictEqual(s.quarantined, 2, '重试不重复隔离');
 
+  const existingColors = [
+    { sheetId: RED, color: '#ff0000', count: 2 },
+    { sheetId: GREEN, color: '#00ff00', count: 1 },
+  ];
+  const ledgerCounts = {};
+  for (const specId of [RED, GREEN, BLUE]) {
+    ledgerCounts[specId] = (await api('GET', `/api/ledger?type=glass&specId=${specId}`)).data.ledger.entries.length;
+  }
+
   for (const body of [
     { action: 'hold', reason: '别的原因', items: [{ color: '#ff0000', count: 2 }, { sheetId: GREEN, count: 1 }] },
     { action: 'hold', reason: '边角气泡、结石', items: [{ color: '#ff0000', count: 1 }, { sheetId: GREEN, count: 1 }] },
+    { action: 'hold', reason: '边角气泡、结石', items: [{ color: '#ff0000', count: 2 }] },
+    { action: 'hold', reason: '边角气泡、结石', items: [{ color: '#ff0000', count: 2 }, { sheetId: GREEN, count: 1 }, { color: '#0000ff', count: 1 }] },
     { action: 'release', reason: '边角气泡、结石', items: [{ color: '#ff0000', count: 2 }, { sheetId: GREEN, count: 1 }] },
   ]) {
     const conflict = await api('POST', '/api/glass-quarantines', { opNo: 'Q-HOLD-1', ...body });
     assert.strictEqual(conflict.status, 409, JSON.stringify(body));
     assert.strictEqual(conflict.data.code, 'op_no_conflict');
     assert.strictEqual(conflict.data.existing.action, 'hold');
+    assert.strictEqual(conflict.data.existing.actionText, '隔离');
+    assert.strictEqual(conflict.data.existing.reason, '边角气泡、结石');
+    assert.deepStrictEqual(conflict.data.existing.colors, existingColors);
   }
   s = await sheetOf(RED);
   assert.strictEqual(s.quarantined, 2, '冲突不改变隔离量');
   s = await sheetOf(GREEN);
   assert.strictEqual(s.quarantined, 1);
+  s = await sheetOf(BLUE);
+  assert.strictEqual(s.quarantined, 0, '冲突中多带的颜色也不得改变隔离量');
+  for (const specId of [RED, GREEN, BLUE]) {
+    const entries = (await api('GET', `/api/ledger?type=glass&specId=${specId}`)).data.ledger.entries;
+    assert.strictEqual(entries.length, ledgerCounts[specId] || 0, `颜色 #${specId} 冲突不得追加台账`);
+  }
+  const history = await api('GET', '/api/glass-quarantines?opNo=Q-HOLD-1');
+  assert.strictEqual(history.data.quarantine.id, 1);
+  assert.deepStrictEqual(
+    history.data.quarantine.items.map((it) => ({ sheetId: it.sheetId, color: it.color, count: it.count })),
+    existingColors,
+  );
 });
 
 // ---------- 4) 解除隔离：不超余额；超余额整次失败；多色其一失败整单回滚 ----------

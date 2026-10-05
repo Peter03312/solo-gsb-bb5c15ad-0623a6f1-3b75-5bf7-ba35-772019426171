@@ -2466,8 +2466,11 @@ function createGlassQuarantine(p) {
           existing: {
             action: dup.action,
             reason: dup.reason,
-            colors: [...quarantineContentFromRows(dup, dupItems).colors.entries()]
-              .map(([sheetId, count]) => ({ sheetId, count })),
+            colors: dupItems.map((it) => ({
+              sheetId: it.sheet_id,
+              color: it.sheet_color,
+              count: it.sheets_count,
+            })),
           },
         };
       }
